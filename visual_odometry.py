@@ -34,7 +34,8 @@ class PinholeCamera:
 
 
 class VisualOdometry:
-	def __init__(self, cam, annotations):
+	def __init__(self, cam, type, annotations):
+		self.source_type = type
 		self.frame_stage = 0
 		self.cam = cam
 		self.new_frame = None
@@ -47,8 +48,9 @@ class VisualOdometry:
 		self.pp = (cam.cx, cam.cy)
 		self.trueX, self.trueY, self.trueZ = 0, 0, 0
 		self.detector = cv2.FastFeatureDetector_create(threshold=25, nonmaxSuppression=True)
-		with open(annotations) as f:
-			self.annotations = f.readlines()
+		if self.source_type == 'KITTI':
+			with open(annotations) as f:
+				self.annotations = f.readlines()
 
 	def getAbsoluteScale(self, frame_id):  #specialized for KITTI odometry dataset
 		ss = self.annotations[frame_id-1].strip().split()
@@ -76,16 +78,25 @@ class VisualOdometry:
 
 	def processFrame(self, frame_id):
 		self.px_ref, self.px_cur = featureTracking(self.last_frame, self.new_frame, self.px_ref)
-		E, mask = cv2.findEssentialMat(self.px_cur, self.px_ref, focal=self.focal, pp=self.pp, method=cv2.RANSAC, prob=0.999, threshold=1.0)
-		_, R, t, mask = cv2.recoverPose(E, self.px_cur, self.px_ref, focal=self.focal, pp = self.pp)
-		absolute_scale = self.getAbsoluteScale(frame_id)
-		if(absolute_scale > 0.1):
-			self.cur_t = self.cur_t + absolute_scale*self.cur_R.dot(t) 
-			self.cur_R = R.dot(self.cur_R)
-		if(self.px_ref.shape[0] < kMinNumFeature):
-			self.px_cur = self.detector.detect(self.new_frame)
-			self.px_cur = np.array([x.pt for x in self.px_cur], dtype=np.float32)
-		self.px_ref = self.px_cur
+		try:
+			E, mask = cv2.findEssentialMat(self.px_cur, self.px_ref, focal=self.focal, pp=self.pp, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+			print 'E.shape:', E.shape
+			print 'pts for computing E: cur->', self.px_cur.shape, 'ref->', self.px_ref.shape
+			_, R, t, mask = cv2.recoverPose(E, self.px_cur, self.px_ref, focal=self.focal, pp = self.pp)
+
+			if self.source_type == 'KITTI':
+				absolute_scale = self.getAbsoluteScale(frame_id)
+			else:
+				absolute_scale = 1 # arbitrary constant
+			if(absolute_scale > 0.1):
+				self.cur_t = self.cur_t + absolute_scale*self.cur_R.dot(t)
+				self.cur_R = R.dot(self.cur_R)
+			if(self.px_ref.shape[0] < kMinNumFeature):
+				self.px_cur = self.detector.detect(self.new_frame)
+				self.px_cur = np.array([x.pt for x in self.px_cur], dtype=np.float32)
+			self.px_ref = self.px_cur
+		except cv2.error as e:
+			print e
 
 	def update(self, img, frame_id):
 		assert(img.ndim==2 and img.shape[0]==self.cam.height and img.shape[1]==self.cam.width), "Frame: provided image has not the same size as the camera model or image is not grayscale"
